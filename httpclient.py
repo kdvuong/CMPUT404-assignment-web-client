@@ -39,15 +39,6 @@ class HTTPClient(object):
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.socket.connect((host, port))
         return None
-
-    def get_code(self, data):
-        return None
-
-    def get_headers(self,data):
-        return None
-
-    def get_body(self, data):
-        return None
     
     def sendall(self, data):
         self.socket.sendall(data.encode('utf-8'))
@@ -61,20 +52,30 @@ class HTTPClient(object):
         done = False
         while not done:
             part = sock.recv(1024)
+            if len(buffer) == 0:
+                headers, _ = self.parse_response(part.decode("utf-8"))
+                status_code = self.get_status_code(headers)
+                if status_code >= 300 and status_code < 400:
+                    buffer.extend(part)
+                    break;
             if (part):
                 buffer.extend(part)
             else:
                 done = not part
-        return buffer.decode('utf-8')
+        return buffer.decode('utf-8', errors="replace")
 
     def GET(self, url, args=None):
-        code = 500
-        body = ""
+        host, path, protocol, port = self.parse_url(url)
+
+        request = f"GET {path} HTTP/{protocol}\r\nHost: {host}\r\nUser-Agent: Python/3.6\r\nAccept: */*\r\nConnection: close\r\n\r\n"
+        code, body = self.send_request(host, port, request)
         return HTTPResponse(code, body)
 
     def POST(self, url, args=None):
-        code = 500
-        body = ""
+        host, path, protocol, port = self.parse_url(url)
+        request_body = self.to_qs(args)
+        request = f"POST {path} HTTP/{protocol}\r\nHost: {host}\r\nUser-Agent: Python/3.6\r\nAccept: */*\r\nContent-type: application/x-www-form-urlencoded\r\nContent-Length: {len(request_body)}\r\nConnection: close\r\n\r\n{request_body}"
+        code, body = self.send_request(host, port, request)
         return HTTPResponse(code, body)
 
     def command(self, url, command="GET", args=None):
@@ -82,6 +83,56 @@ class HTTPClient(object):
             return self.POST( url, args )
         else:
             return self.GET( url, args )
+
+    def parse_url(self, url):
+        protocol, url = url.split("://")
+        path = "/"
+        host = url
+
+        if url.find("/") != -1:
+            url = url.split("/", 1)
+            host = url[0]
+            if len(url) > 1:
+                path = path + url[1]
+        
+        port = 80
+        if host.find(":") != -1:
+            host, port = host.split(":")
+            port = int(port)
+
+        protocol = "2" if protocol == "https" else "1.1"
+
+        return host, path, protocol, port
+
+    def parse_response(self, response):
+        headers, body = response.split("\r\n\r\n")
+        headers = headers.split("\r\n")
+        return headers, body
+
+    def get_status_code(self, headers):
+        first = headers[0].split(" ")
+        return int(first[1])
+
+    def send_request(self, host, port, request):
+        self.connect(host, port)
+        self.sendall(request)
+
+        response = self.recvall(self.socket)
+        headers, body = self.parse_response(response)
+        code = self.get_status_code(headers)
+
+        self.socket.close()
+
+        return code, body
+
+    def to_qs(self, data):
+        query = []
+        if isinstance(data, dict):
+            for (key, val) in data.items():
+                query.append(f"{key}={val}")
+            return "&".join(query)
+        else:
+            return ""
     
 if __name__ == "__main__":
     client = HTTPClient()
